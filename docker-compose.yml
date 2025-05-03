@@ -9,7 +9,12 @@ services:
       - /dev/net/tun
     cap_add:
       - NET_ADMIN
-    network_mode: "host"
+    ports:
+      - 8006:8006
+      - 3389:3389/tcp
+      - 3389:3389/udp
+    expose:
+      - 4040
     volumes:
       - ./windows:/storage
     restart: always
