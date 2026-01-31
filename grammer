@@ -1,0 +1,36 @@
+#!/usr/bin/python
+from loguru import logger
+from autogram.config import load_config, Start
+from autogram import Autogram
+
+class Source(Autogram):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def run(self):
+        super().run()
+        if self.initialized.is_set():
+            logger.debug(self.username)
+        # --
+        while( self.initialized.is_set() ):
+            offset = self.data('offset')
+            updates = self.poll(offset)
+            print(updates)
+
+#-- handle private dm
+@Autogram.add('message')
+def message(bot, update):
+    print('message:', update)
+
+#-- handle callback queries
+@Autogram.add('callback_query')
+def callback_query(bot, update):
+    print('callback_query:', update)
+
+#***************************** <start>
+@Start('grammer.json')
+def initialize(config):
+    bot = Source(config)
+    bot.run()
+#-- </start>
+

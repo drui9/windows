@@ -1,0 +1,11 @@
+*.ipynb_checkpoints*
+storage/
+.termux/
+.local/
+.cache/
+.bash_history
+.lesshst
+.termux_authinfo
+*.json
+.ssh
+.gnupg
