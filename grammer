@@ -3,6 +3,9 @@ from loguru import logger
 from autogram.config import load_config, Start
 from autogram import Autogram
 
+logger.remove()
+
+
 class Source(Autogram):
     def __init__(self, config):
         super().__init__(config)
@@ -15,7 +18,7 @@ class Source(Autogram):
         while( self.initialized.is_set() ):
             offset = self.data('offset')
             updates = self.poll(offset)
-            print(updates)
+            print(updates.json())
 
 #-- handle private dm
 @Autogram.add('message')
@@ -27,7 +30,7 @@ def message(bot, update):
 def callback_query(bot, update):
     print('callback_query:', update)
 
-#***************************** <start>
+#********************* <start>
 @Start('grammer.json')
 def initialize(config):
     bot = Source(config)

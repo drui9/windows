@@ -9,3 +9,4 @@ storage/
 *.json
 .ssh
 .gnupg
+**/*__pycache__
