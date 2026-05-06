@@ -20,6 +20,7 @@ class Source:
         self.start = datetime.now()
         self.terminate = Event()
         self.instance_id = uuid.uuid4().hex
+        self.text ='Enter command or code snippet.'
         logger.remove()
         logfmt = '<green>{line}</green>|<level>{level}</level>|<level>{message}</level>'
         logger.add(sys.stderr, colorize=True, format=logfmt, level='DEBUG')
@@ -29,7 +30,7 @@ class Source:
         if not title:
             title ='river'
         if not content:
-            content ='Enter command or code snippet.'
+            content = self.text
         # --
         task = sp.run([
             'termux-notification-remove',
@@ -45,9 +46,21 @@ class Source:
             f'--button1-action', f'echo $REPLY>{fifo_path}'
         ])
 
+    def clipboard(self, content=None):
+        if not content:
+            content = self.text
+        else:
+            content = str(content)
+        # --
+        task = sp.run([
+            'termux-clipboard-set',
+            content
+        ])
+
+
     def toast(self, content=None):
         if not content:
-            content ='placeholder'
+            content = self.text
         # --
         task = sp.run([
             'termux-toast',
@@ -84,7 +97,15 @@ class Source:
             task.wait()
             return task.returncode, task.stdout.read().decode()
         # --
-        pip = Source.module(pip, 'pip','commands')
+        def shutdown(*args, **kwargs):
+            self.text = 'shutting down...'
+            self.toast()
+            retcode = 0
+            self.terminate.set()
+            return retcode, self.text
+        # --
+        Source.module(pip, 'pip','commands')
+        Source.module(shutdown, 'shutdown','commands')
         # --
         logger.debug('code: {}', len(self.runtime['code']))
         logger.debug('commands: {}', len(self.runtime['commands']))
@@ -106,7 +127,6 @@ class Source:
                     with open(fifo, 'r') as fd:
                         response = fd.read().strip('\n')
                         response_id = uuid.uuid4().hex
-                        self.toast('Processing response...')
                     yield response, response_id
                     self.notification(fpath)
                 except KeyboardInterrupt:
@@ -129,12 +149,13 @@ class Source:
             else:
                 try:
                     logger.debug('response_id: {}', response_id)
+                    logger.debug('response: {}', response)
+                    self.toast(response_id)
                     compiled = compile(response, filename='<string>', mode='exec')
-                    exec(compiled, globals={'main': self})
+                    exec(compiled, globals={'main': self, 'print': self.clipboard})
                 except Exception as e:
                     logger.exception(e)
-                    self.toast(str(e))
-                logger.info(response)
+                    self.text = str(e)
  
     def local(self):
         self.initialize()
