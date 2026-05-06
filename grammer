@@ -152,7 +152,8 @@ class Source:
                     logger.debug('response: {}', response)
                     self.toast(response_id)
                     compiled = compile(response, filename='<string>', mode='exec')
-                    exec(compiled, globals={'main': self, 'print': self.clipboard})
+                    # exec(compiled, globals={'main': self, 'print': self.clipboard})
+                    eval(compiled, globals={'main': self, 'print': self.clipboard})
                 except Exception as e:
                     logger.exception(e)
                     self.text = str(e)
