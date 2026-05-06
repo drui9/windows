@@ -1,39 +1,108 @@
 #!/usr/bin/python
+from base64 import b64decode
+from contextlib import contextmanager
+from threading import Thread, Event
+from datetime import datetime
 from loguru import logger
-from autogram.config import load_config, Start
-from autogram import Autogram
+import subprocess as sp
+import shlex
+import uuid
+import time
+import sys
+import os
 
-logger.remove()
+class Source:
+    def __init__(self):
+        self.start = datetime.now()
+        self.terminate = Event()
+        self.note_id = uuid.uuid4().hex
+        logger.remove()
+        logfmt = '<green>{time:%H:%M:%S}</green>|<level>{level}</level>|<level>{message}</level>'
+        logger.add(sys.stderr, colorize=True, format=logfmt, level='INFO')
+        logger.info('[grammer] started')
+        logger.info(self.note_id)
 
-
-class Source(Autogram):
-    def __init__(self, config):
-        super().__init__(config)
-
-    def run(self):
-        super().run()
-        if self.initialized.is_set():
-            logger.debug(self.username)
+    def notification(self, fifo_path, title=None, content=None):
+        if not title:
+            title ='Test'
+        if not content:
+            content ='placeholder'
         # --
-        while( self.initialized.is_set() ):
-            offset = self.data('offset')
-            updates = self.poll(offset)
-            print(updates.json())
+        task = sp.run([
+            'termux-notification-remove',
+            self.note_id
+        ])
+        # --
+        task = sp.run([
+            'termux-notification',
+            '-i', self.note_id,
+            '-t', title,
+            '-c', content,
+            '--button1', 'reply',
+            f'--button1-action', f'echo $REPLY>{fifo_path}'
+        ])
 
-#-- handle private dm
-@Autogram.add('message')
-def message(bot, update):
-    print('message:', update)
+    def toast(self, content=None):
+        if not content:
+            content ='placeholder'
+        # --
+        task = sp.run([
+            'termux-toast',
+            '-b', 'black',
+            '-g', 'top',
+            content,
+        ])
 
-#-- handle callback queries
-@Autogram.add('callback_query')
-def callback_query(bot, update):
-    print('callback_query:', update)
+    def pip(self, command):
+        task = sp.run([
+            'pip',
+            command
+        ])
+
+    def server(self):
+        fifo = 'transport'
+        if os.path.exists(fifo):
+            os.unlink(fifo)
+        # --
+        os.mkfifo(fifo)
+        cwd = os.getcwd()
+        fifo_path = os.path.join(cwd, fifo)
+        # --
+        def read_fifo(fpath):
+            self.notification(fpath)
+            while not self.terminate.is_set():
+                try:
+                    with open(fifo, 'r') as fd:
+                        response = fd.read().strip('\n')
+                        self.toast('Processing response...')
+                    yield response
+                except KeyboardInterrupt:
+                    logger.info('keyboard interrupt')
+                    self.terminate.set()
+                    break
+            # print('deleting fpath')
+            os.unlink(fpath)
+        # --
+        for response in read_fifo(fifo_path):
+            if response[:3] == 'pip':
+                self.pip(command=response)
+            else:
+                try:
+                    compiled = compile(response, filename='runtime.bin', mode='exec', dont_inherit=True)
+                    exec(compiled)
+                except Exception as e:
+                    logger.exception(e)
+                    self.notification(fifo_path, title='exception', content=str(e))
+                logger.info(response)
+ 
+    def local(self):
+        self.server()
 
 #********************* <start>
-@Start('grammer.json')
-def initialize(config):
-    bot = Source(config)
-    bot.run()
+def initialize():
+    bot = Source()
+    bot.local()
 #-- </start>
+
+initialize()
 

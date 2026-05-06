@@ -10,3 +10,4 @@ storage/
 .ssh
 .gnupg
 **/*__pycache__
+*.*history
