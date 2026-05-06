@@ -1,8 +1,8 @@
 #!/usr/bin/python
-from base64 import b64decode
 from contextlib import contextmanager
 from threading import Thread, Event
 from datetime import datetime
+from base64 import b64decode
 from loguru import logger
 import subprocess as sp
 import uuid
@@ -11,30 +11,34 @@ import sys
 import os
 
 class Source:
+    runtime = {
+        'code': dict(),
+        'commands': dict(),
+        'actions': dict()
+    }
     def __init__(self):
         self.start = datetime.now()
         self.terminate = Event()
-        self.note_id = uuid.uuid4().hex
+        self.instance_id = uuid.uuid4().hex
         logger.remove()
-        logfmt = '<green>{time:%H:%M:%S}</green>|<level>{level}</level>|<level>{message}</level>'
-        logger.add(sys.stderr, colorize=True, format=logfmt, level='INFO')
-        logger.info('[grammer] started')
-        logger.info(self.note_id)
+        logfmt = '<green>{line}</green>|<level>{level}</level>|<level>{message}</level>'
+        logger.add(sys.stderr, colorize=True, format=logfmt, level='DEBUG')
+        logger.info('[{}] started', self.instance_id)
 
     def notification(self, fifo_path, title=None, content=None):
         if not title:
-            title ='Test'
+            title ='river'
         if not content:
-            content ='placeholder'
+            content ='Enter command or code snippet.'
         # --
         task = sp.run([
             'termux-notification-remove',
-            self.note_id
+            self.instance_id
         ])
         # --
         task = sp.run([
             'termux-notification',
-            '-i', self.note_id,
+            '-i', self.instance_id,
             '-t', title,
             '-c', content,
             '--button1', 'reply',
@@ -52,12 +56,39 @@ class Source:
             content,
         ])
 
-    def pip(self, command):
-        logger.debug(command)
-        task = sp.run([
-            '/data/data/com.termux/files/usr/bin/pip',
-            *command.split(' ')[1:]
-        ])
+    @staticmethod
+    def module(module_fn, module_name, module_type):
+        def wrapper(module_fn):
+            logger.debug('module_name: {}', module_name)
+            logger.debug('module_type: {}', module_type)
+            Source.runtime[module_type][module_name] = module_fn
+            return module_fn
+        return wrapper(module_fn)
+
+    @staticmethod
+    def module_call(module_name, module_type, *args, **kwargs):
+        if module_type in Source.runtime:
+            if (module:=Source.runtime[module_type].get(module_name)):
+                try:
+                    logger.debug('{} call:  {}', module_type, module_name)
+                    return module(*args, **kwargs)
+                except Exception as e:
+                    logger.exception(e)
+
+    def initialize(self):
+        def pip(command):
+            task = sp.Popen([
+                '/data/data/com.termux/files/usr/bin/pip',
+                *command.split(' ')[1:]
+            ], shell=False, stdout=sp.PIPE)
+            task.wait()
+            return task.returncode, task.stdout.read().decode()
+        # --
+        pip = Source.module(pip, 'pip','commands')
+        # --
+        logger.debug('code: {}', len(self.runtime['code']))
+        logger.debug('commands: {}', len(self.runtime['commands']))
+        logger.debug('actions: {}', len(self.runtime['code']))
 
     def server(self):
         fifo = 'transport'
@@ -74,8 +105,10 @@ class Source:
                 try:
                     with open(fifo, 'r') as fd:
                         response = fd.read().strip('\n')
+                        response_id = uuid.uuid4().hex
                         self.toast('Processing response...')
-                    yield response
+                    yield response, response_id
+                    self.notification(fpath)
                 except KeyboardInterrupt:
                     logger.info('keyboard interrupt')
                     self.terminate.set()
@@ -83,23 +116,32 @@ class Source:
             # print('deleting fpath')
             os.unlink(fpath)
         # --
-        for response in read_fifo(fifo_path):
-            if response[:3] == 'pip':
-                self.pip(command=response)
+        def command_exists(command):
+            command_name = command.split(' ')[0]
+            if command_name in self.runtime['commands']:
+                return command_name
+        # --
+        for response, response_id in read_fifo(fifo_path):
+            if command:=command_exists(response):
+                retcode, output = Source.module_call(command, 'commands', response)
+                logger.debug('{}:<{}>:{}'.format(response_id, retcode, response))
+                logger.debug('[output]\n{}', output)
             else:
                 try:
-                    compiled = compile(response, filename='runtime.bin', mode='exec', dont_inherit=True)
-                    exec(compiled)
+                    logger.debug('response_id: {}', response_id)
+                    compiled = compile(response, filename='<string>', mode='exec')
+                    exec(compiled, globals={'main': self})
                 except Exception as e:
                     logger.exception(e)
-                    self.notification(fifo_path, title='exception', content=str(e))
+                    self.toast(str(e))
                 logger.info(response)
  
     def local(self):
+        self.initialize()
         self.server()
         task = sp.run([
             'termux-notification-remove',
-            self.note_id
+            self.instance_id
         ])
 #********************* <start>
 def initialize():
