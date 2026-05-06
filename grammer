@@ -5,7 +5,6 @@ from threading import Thread, Event
 from datetime import datetime
 from loguru import logger
 import subprocess as sp
-import shlex
 import uuid
 import time
 import sys
@@ -54,9 +53,10 @@ class Source:
         ])
 
     def pip(self, command):
+        logger.debug(command)
         task = sp.run([
-            'pip',
-            command
+            '/data/data/com.termux/files/usr/bin/pip',
+            *command.split(' ')[1:]
         ])
 
     def server(self):
@@ -97,7 +97,10 @@ class Source:
  
     def local(self):
         self.server()
-
+        task = sp.run([
+            'termux-notification-remove',
+            self.note_id
+        ])
 #********************* <start>
 def initialize():
     bot = Source()
