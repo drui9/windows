@@ -25,7 +25,8 @@ class Source:
         self.instance_id, self.instance_name = [i.strip('\n') for i in sys.stdin.read().split(' ') if i]
         self.text ='Enter command or code snippet.'
         logger.remove()
-        self.logfmt = '<green>{line:8}</green>|{time:%M:%S}|<level>{level}</level>|<level>{message}</level>'
+        self.logfmt = '{time:HH:MM:ss}|<green>{line: <6}</green>|<level>{level}</level>|<level>{message}</level>'
+        # logger.add(sys.stdout, colorize=False, format=self.logfmt, level='DEBUG')
         logger.add(lambda x: self.out_buffer.append(x), colorize=False, format=self.logfmt, level='DEBUG')
         logger.info('[{}] started', self.instance_name)
 
@@ -34,7 +35,7 @@ class Source:
         init = perf_counter()
         yield
         fin = perf_counter()
-        logger.debug('{} took: {}', name, fin - init)
+        logger.debug(f'{name} took: {fin - init:.2f}')
 
     def notificationr(self):
         with self.timeit('notification-remove'):
@@ -45,11 +46,9 @@ class Source:
 
     def notification(self, title=None, content=None):
         if not title:
-            title ='river'
+            title = self.instance_name
         if not content:
             content = self.text
-        else:
-            logger.debug(content)
         # --
         with self.timeit('notification'):
             task = sp.run([
@@ -63,7 +62,7 @@ class Source:
                 f'--button1-action', f'echo $REPLY>{self.fifo}'
             ])
 
-    def clipboard(self, offset=0):
+    def clipboard(self):
         # --todo: permission to copy to clipboard
         with self.timeit('clipboard-set'):
             task = sp.run([
@@ -75,11 +74,12 @@ class Source:
         if not content:
             content = self.text
         # --
-        logger.debug('toast: {}', content)
+        content = str(content)
         with self.timeit('toast'):
             task = sp.run([
                 'termux-toast',
-                '-b', 'black',
+                '-b', 'white',
+                '-c', 'black',
                 '-g', 'top',
                 content
             ])
@@ -87,8 +87,7 @@ class Source:
     @staticmethod
     def module(module_fn, module_name, module_type):
         def wrapper(module_fn):
-            logger.debug('module_name: {}', module_name)
-            logger.debug('module_type: {}', module_type)
+            logger.debug('module loaded: {}, {}', module_name, module_type)
             Source.runtime[module_type][module_name] = module_fn
             return module_fn
         return wrapper(module_fn)
@@ -104,6 +103,13 @@ class Source:
                     logger.exception(e)
 
     def initialize(self):
+        def terminal(command):
+            task = sp.Popen([
+                *command.split(' ')[1:]
+            ], shell=False, stdout=sp.PIPE)
+            task.wait()
+            return task.returncode, task.stdout.read().decode()
+        # --
         def pip(command):
             task = sp.Popen([
                 '/data/data/com.termux/files/usr/bin/pip',
@@ -120,6 +126,7 @@ class Source:
             return retcode, self.text
         # --
         Source.module(pip, 'pip','commands')
+        Source.module(terminal, 'terminal','commands')
         Source.module(shutdown, 'shutdown','commands')
         # --
         logger.debug('code: {}', len(self.runtime['code']))
@@ -155,27 +162,26 @@ class Source:
         self.notification()
         for response, response_id in read_fifo():
             if command:=command_exists(response):
-                retcode, output = Source.module_call(command, 'commands', response)
-                if not isinstance(output, str):
-                    output= str(output)
-                logger.debug('command: {}, retcode: {}', command, retcode)
-                # --
-                self.out_buffer.append(output)
+                with self.timeit(command):
+                    retcode, output = Source.module_call(command, 'commands', response)
+                    if not isinstance(output, str):
+                        output= str(output)
+                    logger.debug('command: {}, retcode: {}\n{}', command, retcode, output)
                 self.clipboard()
             else:
                 try:
                     code = b64encode(response.encode())
                     compiled = compile(response, filename='<string>', mode='exec')
-                    # exec(compiled, globals={'main': self, 'print': self.clipboard})
-                    universe = {
-                        'main': self,
+                    globalz = {
+                        self.instance_name: self,
                         'logger': logger,
                         'thread': Thread,
                         'print': logger.debug,
                         'stdout': self.out_buffer,
-                        'stop': lambda: self.terminate.is_set()
+                        'stop': lambda: self.terminate.set(),
+                        'tostop': lambda: self.terminate.is_set()
                     }
-                    eval(compiled, globals=universe)
+                    exec(compiled, locals=globalz)
                     self.clipboard()
                 except Exception as e:
                     logger.exception(e)
@@ -192,5 +198,6 @@ def initialize():
     bot.local()
 #-- </start>
 
-initialize()
+if __name__ == '__main__':
+    initialize()
 
