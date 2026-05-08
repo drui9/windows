@@ -1,9 +1,9 @@
 #!/usr/bin/python
 from contextlib import contextmanager
 from threading import Thread, Event
-from time import perf_counter_ns
+from time import perf_counter
 from datetime import datetime
-from base64 import b64decode
+from base64 import b64encode
 from loguru import logger
 import subprocess as sp
 import uuid
@@ -18,66 +18,71 @@ class Source:
         'actions': dict()
     }
     def __init__(self):
+        self.fifo = os.path.join(os.getcwd(), 'transport')
         self.out_buffer = list()
         self.start = datetime.now()
         self.terminate = Event()
-        self.instance_id = uuid.uuid4().hex
+        self.instance_id, self.instance_name = [i.strip('\n') for i in sys.stdin.read().split(' ') if i]
         self.text ='Enter command or code snippet.'
         logger.remove()
-        logfmt = '<green>{line}</green>|<level>{level}</level>|<level>{message}</level>'
-        logger.add(sys.stderr, colorize=True, format=logfmt, level='DEBUG')
-        logger.info('[{}] started', self.instance_id)
+        self.logfmt = '<green>{line:8}</green>|{time:%M:%S}|<level>{level}</level>|<level>{message}</level>'
+        logger.add(lambda x: self.out_buffer.append(x), colorize=False, format=self.logfmt, level='DEBUG')
+        logger.info('[{}] started', self.instance_name)
 
     @contextmanager
     def timeit(self, name='timed process'):
-        init = perf_counter_ns()
+        init = perf_counter()
         yield
-        fin = perf_counter_ns()
-        logger.debug('{} took: {}', name, init - fin)
+        fin = perf_counter()
+        logger.debug('{} took: {}', name, fin - init)
 
-    def notification(self, fifo_path, title=None, content=None):
-        if not title:
-            title ='river'
-        if not content:
-            content = self.text
-        # --
+    def notificationr(self):
         with self.timeit('notification-remove'):
             task = sp.run([
                 'termux-notification-remove',
                 self.instance_id
             ])
-        # --
-        task = sp.run([
-            'termux-notification',
-            '-i', self.instance_id,
-            '-t', title,
-            '-c', content,
-            '--button1', 'reply',
-            f'--button1-action', f'echo $REPLY>{fifo_path}'
-        ])
 
-    def clipboard(self, content=None):
+    def notification(self, title=None, content=None):
+        if not title:
+            title ='river'
         if not content:
             content = self.text
         else:
-            content = str(content)
+            logger.debug(content)
         # --
-        task = sp.run([
-            'termux-clipboard-set',
-            content
-        ])
+        with self.timeit('notification'):
+            task = sp.run([
+                'termux-notification',
+                '--alert-once',
+                '--ongoing',
+                '-i', self.instance_id,
+                '-t', title,
+                '-c', content,
+                '--button1', 'reply',
+                f'--button1-action', f'echo $REPLY>{self.fifo}'
+            ])
+
+    def clipboard(self, offset=0):
+        # --todo: permission to copy to clipboard
+        with self.timeit('clipboard-set'):
+            task = sp.run([
+                'termux-clipboard-set',
+                '\n'.join([i.strip('\n').strip() for i in self.out_buffer]).encode()
+            ])
 
     def toast(self, content=None):
         if not content:
             content = self.text
         # --
         logger.debug('toast: {}', content)
-        task = sp.run([
-            'termux-toast',
-            '-b', 'black',
-            '-g', 'top',
-            content,
-        ])
+        with self.timeit('toast'):
+            task = sp.run([
+                'termux-toast',
+                '-b', 'black',
+                '-g', 'top',
+                content
+            ])
 
     @staticmethod
     def module(module_fn, module_name, module_type):
@@ -122,18 +127,15 @@ class Source:
         logger.debug('actions: {}', len(self.runtime['code']))
 
     def server(self):
-        fifo = 'transport'
-        if os.path.exists(fifo):
-            os.unlink(fifo)
         # --
-        os.mkfifo(fifo)
-        cwd = os.getcwd()
-        fifo_path = os.path.join(cwd, fifo)
-        # --
-        def read_fifo(fpath):
+        def read_fifo():
+            if os.path.exists(self.fifo):
+                os.unlink(self.fifo)
+            # --
+            os.mkfifo(self.fifo)
             while not self.terminate.is_set():
                 try:
-                    with open(fifo, 'r') as fd:
+                    with open(self.fifo, 'r') as fd:
                         response = fd.read().strip('\n')
                         response_id = uuid.uuid4().hex
                     yield response, response_id
@@ -141,46 +143,48 @@ class Source:
                     logger.info('keyboard interrupt')
                     self.terminate.set()
                     break
-            # print('deleting fpath')
-            os.unlink(fpath)
+            # --
+            if os.path.exists(self.fifo):
+                os.unlink(self.fifo)
         # --
         def command_exists(command):
             command_name = command.split(' ')[0]
             if command_name in self.runtime['commands']:
                 return command_name
         # --
-        self.notification(fifo_path)
-        for response, response_id in read_fifo(fifo_path):
-            logger.debug(response.encode())
+        self.notification()
+        for response, response_id in read_fifo():
             if command:=command_exists(response):
                 retcode, output = Source.module_call(command, 'commands', response)
-                logger.debug('{}:<{}>:{}'.format(response_id, retcode, response))
-                if isinstance(output, str):
-                    self.clipboard(output)
-                    self.notification(fifo_path, content=output)
-                else:
-                    logger.debug(output)
+                if not isinstance(output, str):
+                    output= str(output)
+                logger.debug('command: {}, retcode: {}', command, retcode)
+                # --
+                self.out_buffer.append(output)
+                self.clipboard()
             else:
                 try:
-                    self.out_buffer.append('response_id: {}'.format(response_id))
-                    self.out_buffer.append('response: {}'.format(response))
+                    code = b64encode(response.encode())
                     compiled = compile(response, filename='<string>', mode='exec')
                     # exec(compiled, globals={'main': self, 'print': self.clipboard})
-                    universe = { 'main': self, 'stdout': self.out_buffer }
+                    universe = {
+                        'main': self,
+                        'logger': logger,
+                        'thread': Thread,
+                        'print': logger.debug,
+                        'stdout': self.out_buffer,
+                        'stop': lambda: self.terminate.is_set()
+                    }
                     eval(compiled, globals=universe)
-                    outstr = '\n'.join(self.out_buffer)
-                    self.clipboard(outstr)
+                    self.clipboard()
                 except Exception as e:
                     logger.exception(e)
-                    self.text = str(e)
+                    self.clipboard()
  
     def local(self):
         self.initialize()
         self.server()
-        task = sp.run([
-            'termux-notification-remove',
-            self.instance_id
-        ])
+        self.notificationr()
         self.out_buffer.clear()
 #********************* <start>
 def initialize():
