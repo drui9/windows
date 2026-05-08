@@ -1,6 +1,7 @@
 #!/usr/bin/python
 from contextlib import contextmanager
 from threading import Thread, Event
+from time import perf_counter_ns
 from datetime import datetime
 from base64 import b64decode
 from loguru import logger
@@ -17,6 +18,7 @@ class Source:
         'actions': dict()
     }
     def __init__(self):
+        self.out_buffer = list()
         self.start = datetime.now()
         self.terminate = Event()
         self.instance_id = uuid.uuid4().hex
@@ -26,16 +28,24 @@ class Source:
         logger.add(sys.stderr, colorize=True, format=logfmt, level='DEBUG')
         logger.info('[{}] started', self.instance_id)
 
+    @contextmanager
+    def timeit(self, name='timed process'):
+        init = perf_counter_ns()
+        yield
+        fin = perf_counter_ns()
+        logger.debug('{} took: {}', name, init - fin)
+
     def notification(self, fifo_path, title=None, content=None):
         if not title:
             title ='river'
         if not content:
             content = self.text
         # --
-        task = sp.run([
-            'termux-notification-remove',
-            self.instance_id
-        ])
+        with self.timeit('notification-remove'):
+            task = sp.run([
+                'termux-notification-remove',
+                self.instance_id
+            ])
         # --
         task = sp.run([
             'termux-notification',
@@ -57,11 +67,11 @@ class Source:
             content
         ])
 
-
     def toast(self, content=None):
         if not content:
             content = self.text
         # --
+        logger.debug('toast: {}', content)
         task = sp.run([
             'termux-toast',
             '-b', 'black',
@@ -121,14 +131,12 @@ class Source:
         fifo_path = os.path.join(cwd, fifo)
         # --
         def read_fifo(fpath):
-            self.notification(fpath)
             while not self.terminate.is_set():
                 try:
                     with open(fifo, 'r') as fd:
                         response = fd.read().strip('\n')
                         response_id = uuid.uuid4().hex
                     yield response, response_id
-                    self.notification(fpath)
                 except KeyboardInterrupt:
                     logger.info('keyboard interrupt')
                     self.terminate.set()
@@ -141,19 +149,27 @@ class Source:
             if command_name in self.runtime['commands']:
                 return command_name
         # --
+        self.notification(fifo_path)
         for response, response_id in read_fifo(fifo_path):
+            logger.debug(response.encode())
             if command:=command_exists(response):
                 retcode, output = Source.module_call(command, 'commands', response)
                 logger.debug('{}:<{}>:{}'.format(response_id, retcode, response))
-                logger.debug('[output]\n{}', output)
+                if isinstance(output, str):
+                    self.clipboard(output)
+                    self.notification(fifo_path, content=output)
+                else:
+                    logger.debug(output)
             else:
                 try:
-                    logger.debug('response_id: {}', response_id)
-                    logger.debug('response: {}', response)
-                    self.toast(response_id)
+                    self.out_buffer.append('response_id: {}'.format(response_id))
+                    self.out_buffer.append('response: {}'.format(response))
                     compiled = compile(response, filename='<string>', mode='exec')
                     # exec(compiled, globals={'main': self, 'print': self.clipboard})
-                    eval(compiled, globals={'main': self, 'print': self.clipboard})
+                    universe = { 'main': self, 'stdout': self.out_buffer }
+                    eval(compiled, globals=universe)
+                    outstr = '\n'.join(self.out_buffer)
+                    self.clipboard(outstr)
                 except Exception as e:
                     logger.exception(e)
                     self.text = str(e)
@@ -165,6 +181,7 @@ class Source:
             'termux-notification-remove',
             self.instance_id
         ])
+        self.out_buffer.clear()
 #********************* <start>
 def initialize():
     bot = Source()
