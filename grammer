@@ -104,11 +104,14 @@ class Source:
 
     def initialize(self):
         def terminal(command):
-            task = sp.Popen([
-                *command.split(' ')[1:]
-            ], shell=False, stdout=sp.PIPE)
+            task = sp.Popen(
+                [*command.split(' ')[1:]],
+                stdout=sp.PIPE,
+                stderr=sp.PIPE,
+                shell=False,
+            )
             task.wait()
-            return task.returncode, task.stdout.read().decode()
+            return task.returncode, task.stdout.read().decode() or task.stderr.read().decode()
         # --
         def pip(command):
             task = sp.Popen([
