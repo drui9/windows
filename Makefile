@@ -2,7 +2,7 @@
 src := grammer
 
 run: $(src)
-	@sha512sum $<|./$<
+	@python $< < $<
 
 clean:
 	rm -rf **/*__pycache__ transport

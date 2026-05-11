@@ -1,11 +1,15 @@
 #!/usr/bin/python
+#source: grammer
+#license: GPLv2
+#?loguru
+from base64 import b64encode, b64decode
 from contextlib import contextmanager
 from threading import Thread, Event
 from time import perf_counter
 from datetime import datetime
-from base64 import b64encode
 from loguru import logger
 import subprocess as sp
+import hashlib
 import uuid
 import time
 import sys
@@ -18,27 +22,79 @@ class Source:
         'actions': dict()
     }
     def __init__(self):
-        self.fifo = os.path.join(os.getcwd(), 'transport')
         self.out_buffer = list()
-        self.start = datetime.now()
         self.terminate = Event()
-        self.instance_id, self.instance_name = [i.strip('\n') for i in sys.stdin.read().split(' ') if i]
+        self.start = datetime.now()
         self.text ='Enter command or code snippet.'
-        logger.remove()
-        self.logfmt = '{time:HH:MM:ss}|<green>{line: <6}</green>|<level>{level}</level>|<level>{message}</level>'
-        # logger.add(sys.stdout, colorize=False, format=self.logfmt, level='DEBUG')
-        logger.add(lambda x: self.out_buffer.append(x), colorize=False, format=self.logfmt, level='DEBUG')
+        self.initialize()
+        self.instance_name, self.instance_id = self.load()
+        self.fifo = os.path.join(os.getcwd(), self.instance_id)
         logger.info('[{}] started', self.instance_name)
 
+    def add_code(self, name:str, base64_code: str, requirements= str()):
+        """Add code to self.code. Only root file has noedit"""
+        noedit = False
+        if os.path.exists(name):
+            noedit = True
+        # --
+        metahead = '#?'
+        code = b64decode(base64_code).decode()
+        if metadata := [i.strip(metahead).strip() for i in code.split('\n') if metahead in i[:2]]:
+            logger.debug(metadata)
+            # -- todo: check if metadata requirements are in root
+            # if not installed, call pip
+        # --
+        code_hash = hashlib.sha512(base64_code)
+        hash_algorithm = code_hash.name
+        source_digest = code_hash.hexdigest()
+        if stored := self.runtime['code'].get(name):
+            if not stored['editable']:
+                if stored['digest'] != source_digest:
+                    logger.warning('Attempt to modify {}', name)
+                    return None, None, None
+                return name, hash_algorithm, source_digest
+        # Parse modification time
+        mod_time = datetime.now()
+        if noedit:
+            check_modification = f'terminal date -r {name}'
+            time_str = self.module_call('terminal', 'commands', check_modification)
+            time_str = time_str[1].strip('\n')
+            mod_time = datetime.strptime(time_str, "%a %b %d %H:%M:%S EAT %Y")
+        # todo: secure code name for special characters
+        self.runtime['code'][name] = {
+            'idle': False,
+            'source': base64_code,
+            'editable': not noedit,
+            'digest': source_digest,
+            'modified': mod_time,
+            'requirements': requirements
+        }
+        return name, hash_algorithm, source_digest
+
+    def load(self):
+        requirements = os.path.join(os.getcwd(), 'requirements.txt')
+        if not os.path.exists(requirements):
+            raise RuntimeError('missing dependencies')
+        # --
+        with open(requirements, 'r') as rf:
+            requires = [i.strip('\n').strip() for i in rf.readlines()]
+        # --
+        source_name = sys.argv[0]
+        source = b64encode(sys.stdin.read().encode())
+        name, _, digest = self.add_code(source_name, source, ','.join(requires))
+        self.runtime['code'][name]['active'] = self.stopped
+        return name, digest
+
     @contextmanager
-    def timeit(self, name='timed process'):
+    @staticmethod
+    def timeit(name='timed process'):
         init = perf_counter()
         yield
         fin = perf_counter()
         logger.debug(f'{name} took: {fin - init:.2f}')
 
     def notificationr(self):
-        with self.timeit('notification-remove'):
+        with Source.timeit('notification-remove'):
             task = sp.run([
                 'termux-notification-remove',
                 self.instance_id
@@ -46,11 +102,12 @@ class Source:
 
     def notification(self, title=None, content=None):
         if not title:
-            title = self.instance_name
+            start = len(self.instance_id) - 16
+            title = '{}({})'.format(self.instance_name, self.instance_id[start:])
         if not content:
             content = self.text
         # --
-        with self.timeit('notification'):
+        with Source.timeit('notification'):
             task = sp.run([
                 'termux-notification',
                 '--alert-once',
@@ -63,8 +120,7 @@ class Source:
             ])
 
     def clipboard(self):
-        # --todo: permission to copy to clipboard
-        with self.timeit('clipboard-set'):
+        with Source.timeit('clipboard-set'):
             task = sp.run([
                 'termux-clipboard-set',
                 '\n'.join([i.strip('\n').strip() for i in self.out_buffer]).encode()
@@ -75,7 +131,7 @@ class Source:
             content = self.text
         # --
         content = str(content)
-        with self.timeit('toast'):
+        with Source.timeit('toast'):
             task = sp.run([
                 'termux-toast',
                 '-b', 'white',
@@ -87,8 +143,11 @@ class Source:
     @staticmethod
     def module(module_fn, module_name, module_type):
         def wrapper(module_fn):
-            logger.debug('module loaded: {}, {}', module_name, module_type)
-            Source.runtime[module_type][module_name] = module_fn
+            logger.debug('module loaded: {}, {}'.format(module_name, module_type)) 
+            Source.runtime[module_type][module_name] = {
+                'callback': module_fn,
+                'metadata': {}
+            }
             return module_fn
         return wrapper(module_fn)
 
@@ -98,11 +157,16 @@ class Source:
             if (module:=Source.runtime[module_type].get(module_name)):
                 try:
                     logger.debug('{} call:  {}', module_type, module_name)
-                    return module(*args, **kwargs)
+                    with Source.timeit(module_name):
+                        return module['callback'](*args, **kwargs)
                 except Exception as e:
                     logger.exception(e)
 
     def initialize(self):
+        logger.remove()
+        logfmt = '{time:HH:MM:ss}|<green>{line: <4}</green>|<level>{level}</level>|<level>{message}</level>'
+        logger.add(sys.stdout, colorize=True, format=logfmt, level='DEBUG')
+        logger.add(lambda x: self.out_buffer.append(x), colorize=False, format=logfmt, level='DEBUG')
         def terminal(command):
             task = sp.Popen(
                 [*command.split(' ')[1:]],
@@ -111,7 +175,7 @@ class Source:
                 shell=False,
             )
             task.wait()
-            return task.returncode, task.stdout.read().decode() or task.stderr.read().decode()
+            return task.returncode, task.stdout.read().decode(), task.stderr.read().decode()
         # --
         def pip(command):
             task = sp.Popen([
@@ -159,39 +223,50 @@ class Source:
         # --
         def command_exists(command):
             command_name = command.split(' ')[0]
+            # --
             if command_name in self.runtime['commands']:
                 return command_name
         # --
         self.notification()
         for response, response_id in read_fifo():
             if command:=command_exists(response):
-                with self.timeit(command):
-                    retcode, output = Source.module_call(command, 'commands', response)
+                with Source.timeit(command):
+                    output = Source.module_call(command, 'commands', response)
+                    logger.debug(output)
                     if not isinstance(output, str):
                         output= str(output)
-                    logger.debug('command: {}, retcode: {}\n{}', command, retcode, output)
+                    logger.debug('command: {}, output: \n{}', command, output)
                 self.clipboard()
             else:
                 try:
                     code = b64encode(response.encode())
-                    compiled = compile(response, filename='<string>', mode='exec')
+                    codename = '<string>'
+                    compiled = compile(response, filename=codename, mode='exec')
                     globalz = {
-                        self.instance_name: self,
+                        'root': self,
                         'logger': logger,
                         'thread': Thread,
                         'print': logger.debug,
                         'stdout': self.out_buffer,
-                        'stop': lambda: self.terminate.set(),
-                        'tostop': lambda: self.terminate.is_set()
+                        'stopped': self.stopped
                     }
+                    # -- todo: delayed code run
+                    # -- todo: run code in persistent session
                     exec(compiled, locals=globalz)
                     self.clipboard()
                 except Exception as e:
                     logger.exception(e)
                     self.clipboard()
- 
+
+    @property
+    def stop(self):
+        return self.terminate.set()
+
+    @property
+    def stopped(self):
+        return self.terminate.is_set()
+
     def local(self):
-        self.initialize()
         self.server()
         self.notificationr()
         self.out_buffer.clear()

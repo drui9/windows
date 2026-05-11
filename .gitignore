@@ -11,3 +11,4 @@ storage/
 .gnupg
 **/*__pycache__
 *.*history
+*.global.txt

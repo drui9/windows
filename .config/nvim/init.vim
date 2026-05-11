@@ -9,7 +9,7 @@ set tabstop=4
 set cursorline
 set autoindent
 set noswapfile
-set scrolloff=9
+set scrolloff=19
 set foldcolumn=1
 set shiftwidth=4
 set softtabstop=4
@@ -61,12 +61,11 @@ nmap < :tabclose <CR>
 nmap tn :tabnext<CR>
 nmap tp :tabprevious<CR>
 nmap tb :Telescope buffers<CR>
-nmap tt :!cowsay `date`<CR>
-nmap tm :terminal<CR>
-nmap mn :!cal<CR>
+nmap tt :terminal<CR>
+nmap mm :wa<CR>
 
 " visualization
-nmap ff :!open image.png<CR>
+nmap ff :!termux-open image.png<CR>
 
 " folding
 nmap fu za<CR>
