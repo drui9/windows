@@ -12,3 +12,4 @@ storage/
 **/*__pycache__
 *.*history
 *.global.txt
+dotfiles
