@@ -103,7 +103,11 @@ alias gl='git log --oneline'
 alias refr='source ~/.bashrc'
 alias clean='rm -f ~/.*history*'
 
-if [ -d ~/.venv ]; then
-  echo 'activating venv'
-  source .venv/bin/activate
+if ! [ -d ~/.venv ]; then
+  if [ -f grammer-setup ]; then
+    echo 'Grammer project not initilized'
+    echo 'Press enter to install, ctrl+c to cancel'
+    read
+    ./grammer-setup
+  fi
 fi
