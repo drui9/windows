@@ -1,7 +1,6 @@
 #!/usr/bin/python
 #source: grammer
 #license: GPLv2
-#?loguru
 from base64 import b64encode, b64decode
 from contextlib import contextmanager
 from threading import Thread, Event
@@ -19,7 +18,7 @@ class Source:
     runtime = {
         'code': dict(),
         'commands': dict(),
-        'actions': dict()
+        'threads': dict()
     }
     def __init__(self):
         self.out_buffer = list()
@@ -33,16 +32,39 @@ class Source:
 
     def add_code(self, name:str, base64_code: str, requirements= str()):
         """Add code to self.code. Only root file has noedit"""
-        noedit = False
+        editable = True
         if os.path.exists(name):
-            noedit = True
+            editable = False
         # --
         metahead = '#?'
+        requires = list()
         code = b64decode(base64_code).decode()
-        if metadata := [i.strip(metahead).strip() for i in code.split('\n') if metahead in i[:2]]:
-            logger.debug(metadata)
-            # -- todo: check if metadata requirements are in root
-            # if not installed, call pip
+        metadata = [i.strip(metahead).strip() for i in code.split('\n') if metahead in i[:2]]
+        metadata.extend(requirements.split(','))
+        for dep in metadata:
+            upgrade = False
+            depname, depver = None, None
+            if '=' in dep:
+                depname, depver = [i for i in dep.split('=') if i]
+                if '>' in depname:
+                    upgrade = True
+            # --
+            if editable:
+                for codemeta in self.runtime['code'].values():
+                    for item in codemeta['requirements']:
+                        logger.debug(item)
+                        cname, cver = item
+                        if depname.lower() == cname.lower():
+                            if upgrade:
+                                if depver != cver:
+                                    logger.debug('version mismatch: {} vs {}', depver, cver)
+                        else:
+                            logger.debug('install: {} {}', depname, depver)
+            else:
+                if not ( depname and depver ):
+                    logger.critical('Invalid deoendancy: {}', dep)
+                else:
+                    requires.append((depname, depver))
         # --
         code_hash = hashlib.sha512(base64_code)
         hash_algorithm = code_hash.name
@@ -55,20 +77,21 @@ class Source:
                 return name, hash_algorithm, source_digest
         # Parse modification time
         mod_time = datetime.now()
-        if noedit:
+        if not editable:
             check_modification = f'terminal date -r {name}'
             time_str = self.module_call('terminal', 'commands', check_modification)
             time_str = time_str[1].strip('\n')
             mod_time = datetime.strptime(time_str, "%a %b %d %H:%M:%S EAT %Y")
         # todo: secure code name for special characters
         self.runtime['code'][name] = {
-            'idle': False,
-            'source': base64_code,
-            'editable': not noedit,
-            'digest': source_digest,
+            'idle': True,
             'modified': mod_time,
-            'requirements': requirements
+            'editable': editable,
+            'source': base64_code,
+            'digest': source_digest,
+            'requirements': requires
         }
+        logger.debug(self.runtime['code'])
         return name, hash_algorithm, source_digest
 
     def load(self):
@@ -82,7 +105,7 @@ class Source:
         source_name = sys.argv[0]
         source = b64encode(sys.stdin.read().encode())
         name, _, digest = self.add_code(source_name, source, ','.join(requires))
-        self.runtime['code'][name]['active'] = self.stopped
+        self.runtime['code'][name]['idle'] = self.stopped
         return name, digest
 
     @contextmanager
@@ -241,19 +264,20 @@ class Source:
                 try:
                     code = b64encode(response.encode())
                     codename = '<string>'
-                    compiled = compile(response, filename=codename, mode='exec')
-                    globalz = {
-                        'root': self,
-                        'logger': logger,
-                        'thread': Thread,
-                        'print': logger.debug,
-                        'stdout': self.out_buffer,
-                        'stopped': self.stopped
-                    }
+                    self.add_code(codename, code)
                     # -- todo: delayed code run
                     # -- todo: run code in persistent session
-                    exec(compiled, locals=globalz)
-                    self.clipboard()
+                    # compiled = compile(response, filename=codename, mode='exec')
+                    # globalz = {
+                    #     'root': self,
+                    #     'logger': logger,
+                    #     'thread': Thread,
+                    #     'print': logger.debug,
+                    #     'stdout': self.out_buffer,
+                    #     'stopped': self.stopped
+                    # }
+                    # exec(compiled, locals=globalz)
+                    # self.clipboard()
                 except Exception as e:
                     logger.exception(e)
                     self.clipboard()
