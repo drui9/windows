@@ -39,15 +39,29 @@ class Source:
         metahead = '#?'
         requires = list()
         code = b64decode(base64_code).decode()
-        metadata = [i.strip(metahead).strip() for i in code.split('\n') if metahead in i[:2]]
-        metadata.extend(requirements.split(','))
-        for dep in metadata:
+        for mt in [i for i in code.split('\n') if metahead in i]:
+            requires.append(mt)
+        # --
+        if requirements:
+            requires.extend(requirements.split(','))
+        # --
+        logger.debug(requires)
+        return
+        for dep in requires:
+            depname, depver = [i for i in dep.split('=') if i]
             upgrade = False
-            depname, depver = None, None
+            logger.debug(depname)
+            logger.debug(depver)
             if '=' in dep:
-                depname, depver = [i for i in dep.split('=') if i]
                 if '>' in depname:
                     upgrade = True
+                else:
+                    if not editable:
+                        logger.debug('Locking: {} to version: {}', depname, depver)
+                    else:
+                        logger.debug('Disk dependancy not pinned for: {}', dep)
+            else:
+                logger.debug('Unpinned dependancy installed: {}', dep)
             # --
             if editable:
                 for codemeta in self.runtime['code'].values():
@@ -91,7 +105,7 @@ class Source:
             'digest': source_digest,
             'requirements': requires
         }
-        logger.debug(self.runtime['code'])
+        # logger.debug(self.runtime['code'])
         return name, hash_algorithm, source_digest
 
     def load(self):
@@ -262,9 +276,19 @@ class Source:
                 self.clipboard()
             else:
                 try:
+                    nametag = '#[]'
+                    codename = response.split('\n')[0]
+                    tags_found = 0
+                    for ch in nametag:
+                        if ch in codename:
+                            tags_found += 1
+                    if tags_found != 3:
+                        codename = '<code>'
+                    else:
+                        codename = re.search('\\w', codename).string()
                     code = b64encode(response.encode())
-                    codename = '<string>'
-                    self.add_code(codename, code)
+                    name, algo, digest = self.add_code(codename, code)
+                    logger.debug('added code: name({}), algo({}), digest({})', name, algo, digest)
                     # -- todo: delayed code run
                     # -- todo: run code in persistent session
                     # compiled = compile(response, filename=codename, mode='exec')
@@ -281,6 +305,24 @@ class Source:
                 except Exception as e:
                     logger.exception(e)
                     self.clipboard()
+
+    def thread(self, function, *args, **kwargs):
+        def function_call(metadata):
+            metadata['exited'].clear()
+            metadata['callable'](*metadata['args'], **metadata['kwargs'])
+            metadata['exited'].set()
+        # --
+        fn_name = function.__name__
+        self.runtime['threads'][fn_name] = {
+            'exited' : Event(),
+            'callable' : function,
+            'kwargs': kwargs,
+            'args': args
+        }
+        metadata = self.runtime['threads'][fn_name]
+        t = Thread(target=function_call, args=(metadata,))
+        metadata['workthread'] = t
+        t.start()
 
     @property
     def stop(self):
