@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 # --
 apt update
-apt install clang python git openssh gnupg
+apt install clang python gnupg tree which neovim termux-api file
 python -m venv .venv
 
 # --

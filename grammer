@@ -7,13 +7,20 @@ from threading import Thread, Event
 from time import perf_counter
 from datetime import datetime
 from loguru import logger
+from socket import socket
 import subprocess as sp
 import hashlib
-import uuid
-import time
 import sys
 import os
+from socket import(
+    AF_INET,
+    SOL_SOCKET,
+    SOCK_STREAM,
+    SO_REUSEADDR
+)
 
+
+# --
 class Source:
     runtime = {
         'code': dict(),
@@ -25,7 +32,7 @@ class Source:
         self.terminate = Event()
         self.start = datetime.now()
         self.text ='Enter command or code snippet.'
-        self.initialize()
+        self.socket = self.initialize()
         self.instance_name, self.instance_id = self.load()
         self.fifo = os.path.join(os.getcwd(), self.instance_id)
         logger.info('[{}] started', self.instance_name)
@@ -37,48 +44,35 @@ class Source:
             editable = False
         # --
         metahead = '#?'
-        requires = list()
         code = b64decode(base64_code).decode()
-        for mt in [i for i in code.split('\n') if metahead in i]:
-            requires.append(mt)
+        if not len(requirements):
+            metahead_lines = [i.replace(metahead, '') for i in code.split('\n') if metahead in i]
+            meta = list()
+            for line in metahead_lines:
+                for required in [i for i in line.split(',') if i]:
+                    if '=' not in required:
+                        meta.append(f'{required}>=0.0.1')
+            requirements = ','.join(meta).strip(',')
         # --
-        if requirements:
-            requires.extend(requirements.split(','))
+        requires = requirements.strip(',').split(',')
+        def get_module(modname):
+            for module in self.runtime['code'].values():
+                for mod in module['requirements']:
+                    logger.warning(mod)
+            return False, False
         # --
-        logger.debug(requires)
-        return
-        for dep in requires:
-            depname, depver = [i for i in dep.split('=') if i]
-            upgrade = False
-            logger.debug(depname)
-            logger.debug(depver)
-            if '=' in dep:
-                if '>' in depname:
-                    upgrade = True
-                else:
-                    if not editable:
-                        logger.debug('Locking: {} to version: {}', depname, depver)
-                    else:
-                        logger.debug('Disk dependancy not pinned for: {}', dep)
+        for dependancy in requires:
+            lock = True
+            installed = get_module(dependancy)
+            logger.debug('installed: {}, requested: {}', installed, dependancy)
+            depname, depver = None, None
+            if '>' in dependancy:
+                lock = False
+                depname, depver = dependancy.split('>')
+                depver = depver.strip('=')
             else:
-                logger.debug('Unpinned dependancy installed: {}', dep)
+                depname, depver = dependancy.split('==')
             # --
-            if editable:
-                for codemeta in self.runtime['code'].values():
-                    for item in codemeta['requirements']:
-                        logger.debug(item)
-                        cname, cver = item
-                        if depname.lower() == cname.lower():
-                            if upgrade:
-                                if depver != cver:
-                                    logger.debug('version mismatch: {} vs {}', depver, cver)
-                        else:
-                            logger.debug('install: {} {}', depname, depver)
-            else:
-                if not ( depname and depver ):
-                    logger.critical('Invalid deoendancy: {}', dep)
-                else:
-                    requires.append((depname, depver))
         # --
         code_hash = hashlib.sha512(base64_code)
         hash_algorithm = code_hash.name
@@ -96,7 +90,7 @@ class Source:
             time_str = self.module_call('terminal', 'commands', check_modification)
             time_str = time_str[1].strip('\n')
             mod_time = datetime.strptime(time_str, "%a %b %d %H:%M:%S EAT %Y")
-        # todo: secure code name for special characters
+        # todo: check code for sensitive functionality
         self.runtime['code'][name] = {
             'idle': True,
             'modified': mod_time,
@@ -105,7 +99,7 @@ class Source:
             'digest': source_digest,
             'requirements': requires
         }
-        # logger.debug(self.runtime['code'])
+        # logger.debug(self.runtime['code'][name])
         return name, hash_algorithm, source_digest
 
     def load(self):
@@ -118,9 +112,21 @@ class Source:
         # --
         source_name = sys.argv[0]
         source = b64encode(sys.stdin.read().encode())
-        name, _, digest = self.add_code(source_name, source, ','.join(requires))
-        self.runtime['code'][name]['idle'] = self.stopped
-        return name, digest
+        requires = ','.join(requires)
+        self.add_code(source_name, source, requires)
+        # name, _, digest = self.add_code(source_name, source, ','.join(requires))
+        # self.runtime['code'][name]['idle'] = self.stopped
+        # # --
+        beacon = 'grammer-beacon'
+        with open(beacon, 'rb') as b:
+            beacon_src = b64encode(b.read())
+            self.add_code(beacon, beacon_src)
+            # _, _, b_digest = self.add_code(beacon, beacon_src)
+            # logger.debug('beacon digest: {}', b_digest[-8:])
+        # return name, digest
+        logger.warning('debug exit')
+        exit(0)
+        return 'test', 'test'
 
     @contextmanager
     @staticmethod
@@ -202,7 +208,7 @@ class Source:
     def initialize(self):
         logger.remove()
         logfmt = '{time:HH:MM:ss}|<green>{line: <4}</green>|<level>{level}</level>|<level>{message}</level>'
-        logger.add(sys.stdout, colorize=True, format=logfmt, level='DEBUG')
+        logger.add(sys.stdout, colorize=False, format=logfmt, level='DEBUG')
         logger.add(lambda x: self.out_buffer.append(x), colorize=False, format=logfmt, level='DEBUG')
         def terminal(command):
             task = sp.Popen(
@@ -233,9 +239,11 @@ class Source:
         Source.module(terminal, 'terminal','commands')
         Source.module(shutdown, 'shutdown','commands')
         # --
-        logger.debug('code: {}', len(self.runtime['code']))
-        logger.debug('commands: {}', len(self.runtime['commands']))
-        logger.debug('actions: {}', len(self.runtime['code']))
+        sock = socket(AF_INET, SOCK_STREAM)
+        sock.bind(('0.0.0.0', 9097))
+        sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+        sock.listen()
+        return sock
 
     def server(self):
         # --
