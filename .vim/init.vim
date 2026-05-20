@@ -19,10 +19,8 @@ set foldmarker=<>,</>
 set foldmethod=marker
 set backspace=indent,eol,start
 
-call plug#begin('~/.config/nvim/autoload/plugged')
-Plug 'nvim-treesitter/nvim-treesitter'
+call plug#begin('~/.vim/autoload/plugged')
 Plug 'vim-airline/vim-airline-themes'
-" Plug 'neoclide/coc.nvim'
 Plug 'vim-airline/vim-airline'
 Plug 'karb94/neoscroll.nvim'
 Plug 'nvim-lua/plenary.nvim'

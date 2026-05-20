@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 if ! [ -d ~/.venv ]; then
     apt update;
-    apt install clang python gnupg tree which neovim termux-api file;
+    apt install clang python gnupg tree which vim termux-api file;
     python -m venv .venv;
 fi
 
