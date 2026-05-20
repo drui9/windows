@@ -17,3 +17,4 @@ while True:
             # EOF - reopen
             os.close(fd)
             fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+

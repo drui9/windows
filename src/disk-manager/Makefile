@@ -1,4 +1,4 @@
-src := gpg.py
+src := storage404.py
 env := ~/.venv
 
 # encode

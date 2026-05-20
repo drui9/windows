@@ -1,4 +1,4 @@
-src := gpg.py
+src := music.py
 env := ~/.venv
 
 # encode

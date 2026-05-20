@@ -1,7 +1,9 @@
-src := gpg.py
+src := main.py
 env := ~/.venv
 
-# encode
+# --
 run: $(src)
 	$(env)/bin/python $^
 
+clean:
+	rm -rf __pycache__

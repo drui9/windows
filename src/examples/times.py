@@ -1,3 +1,4 @@
+#!/usr/bin/python
 import calendar
 
 def print_calendar(year, month):

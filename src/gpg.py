@@ -5,6 +5,10 @@ import gnupg, os, hashlib, base64
 #stdout.clear()
 cwd= os.getcwd()
 gnupghome= os.path.join(cwd, '.gnupg')
+if not os.path.exists(gnupghome):
+  os.mkdir(gnupghome)
+
+# --
 gpg= gnupg.GPG(gnupghome=gnupghome)
 
 if not os.path.exists('private-key'):
@@ -21,12 +25,6 @@ if not os.path.exists('private-key'):
   key = gpg.gen_key(input_data)
   fingerprint = key.fingerprint
   print(f"Generated key with fingerprint: {fingerprint}")
-
-  # Hash source code
-  with open(grammer.instance_name, 'rb') as f:
-    source = f.read()
-    source_hash = hashlib.sha512(source)
-    print(source_hash)
 
   # Export public key (ASCII armored format)
   private_key = gpg.export_keys(fingerprint, True, passphrase='passphrase')

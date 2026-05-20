@@ -1,4 +1,12 @@
-# openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
+# ssl-tls in python
+... with self-signed certificates
+
+```
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
+```
+
+```python
+# client code
 import ssl
 import socket
 
@@ -11,8 +19,9 @@ with socket.create_connection(("localhost", 8443)) as sock:
         ssl_sock.sendall(b"Hello, server!")
         data = ssl_sock.recv(1024)
         print(f"Received: {data}")
-        
-# ------------------------
+
+#############
+# server code
 import ssl
 import socket
 # Create a standard socket
@@ -30,3 +39,4 @@ with context.wrap_socket(server_socket, server_side=True) as ssl_socket:
     print(f"Connected by {addr}")
     data = conn.recv(1024)
     conn.sendall(b"Hello, SSL!")
+```

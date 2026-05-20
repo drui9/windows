@@ -1,0 +1,290 @@
+#source: turmoid
+#license: GPLv2
+from multiprocessing import Queue, Process
+from threading import Thread, Event, Lock
+from base64 import b64encode, b64decode
+from contextlib import contextmanager
+from time import perf_counter_ns, perf_counter
+from datetime import datetime, UTC
+from loguru import logger
+from socket import socket
+import subprocess as sp
+from queue import Empty
+from glob import glob
+import hashlib
+import signal
+import shlex
+import json
+import time
+import sys
+import os
+
+# --
+class Source:
+    terminate = Event()
+    runtime = {
+        'code': dict(),
+        'functions': dict(),
+        'threads': dict()
+    }
+
+    def __init__(self):
+        with Source.timeit(Source.__name__):
+            signal.signal(signal.SIGINT, self.stop)
+            self.initialize()
+            self.instance_name, self.instance_id = self.load()
+            self.fifo = os.path.join(os.getcwd(), self.instance_id[-8:])
+            logger.info('[{}] starting with id: {}', self.instance_name, self.instance_id[-8:])
+
+    @contextmanager
+    @staticmethod
+    def timeit(name='timed process'):
+        init = perf_counter_ns()
+        yield
+        fin = perf_counter_ns()
+        delta = fin - init
+        logger.debug(f'{name} took: {delta/1e9:.2f} s')
+
+    def notificationr(self):
+        with Source.timeit('notification-remove'):
+            task = sp.run([
+                'termux-notification-remove',
+                self.instance_id
+            ])
+
+    def resolve_dependancy(self, dependancy):
+        # logger.info('resolving: {}', dependancy)
+        for module in self.runtime['code'].values():
+            for mod in module['requirements']:
+                # logger.warning(mod)
+                break
+        return False
+
+    # <> add code
+    def add_code(self, name:str, base64_code: str, requirements= str()):
+        """Add code to self.code. Only root file has noedit"""
+        static = False
+        if os.path.exists(name):
+            static = True
+        # --
+        metahead = '#?'
+        code = b64decode(base64_code).decode()
+        if not len(requirements):
+            metahead_lines = [i.replace(metahead, '') for i in code.split('\n') if metahead in i]
+            meta = list()
+            for line in metahead_lines:
+                for required in [i for i in line.split(',') if i]:
+                    if '=' not in required:
+                        meta.append(f'{required}>=0.0.1')
+            requirements = ','.join(meta).strip(',')
+        # --
+        requires = requirements.strip(',').split(',')
+        # --
+        resolved = False
+        for dependancy in requires:
+            resolved = self.resolve_dependancy(dependancy)
+        # --
+        code_hash = hashlib.sha512(base64_code)
+        hash_algorithm = code_hash.name
+        source_digest = code_hash.hexdigest()
+        if stored := self.runtime['code'].get(name):
+            if stored['static']:
+                if stored['digest'] != source_digest:
+                    logger.critical('Attempt to modify static file: {}', name)
+                    return None, None, None
+                return name, hash_algorithm, source_digest
+        # Parse modification time
+        mod_time = datetime.now(UTC)
+        if static:
+            check_modification = f'terminal date -r {name}'
+            retcode, out, err = Source.function_call('terminal', check_modification)
+            if len(err):
+                logger.debug('cmd: [{}], returned: {}, output: {}', check_modification, retcode, time_str)
+            else:
+                time_str = out.strip('\n')
+                mod_time = datetime.strptime(time_str, "%a %b %d %H:%M:%S EAT %Y")
+        # --
+        self.runtime['code'][name] = {
+            'idle': True,
+            'modified': mod_time,
+            'static': static,
+            'source': base64_code,
+            'digest': source_digest,
+            'resolved': resolved,
+            'requirements': requires
+        }
+        return name, hash_algorithm, source_digest
+    # </>
+
+    # <> show sources
+    def show_src(self):
+        src_copy = self.runtime['code'].copy()
+        for k,v in src_copy.items():
+            v['name'] = k
+            v['source'] = v["source"].decode()[-8:]
+            timefmt = '%a %b %d %H:%M:%S EAT %Y'
+            v['digest'] = v['digest'][-8:]
+            v['modified'] = v['modified'].strftime(timefmt)
+            print(json.dumps(src_copy[k], indent=2))
+    # </>
+
+    # <> load
+    def load(self):
+        requirements = os.path.join(os.getcwd(), 'requirements.txt')
+        if not os.path.exists(requirements):
+            raise RuntimeError('missing dependencies')
+        # --
+        with open(requirements, 'r') as rf:
+            requires = [i.strip('\n').strip() for i in rf.readlines()]
+        # --
+        source_name = sys.argv[0]
+        source = b64encode(sys.stdin.read().encode())
+        requires = ','.join(requires)
+        name, _, digest = self.add_code(source_name, source, requires)
+        self.runtime['code'][name]['idle'] = self.stopped
+        # --
+        module_dir = os.path.join(os.getcwd(), 'src/bin/*')
+        modules = glob(module_dir)
+        logger.debug('modules:', modules)
+        for module in modules:
+            with open(module, 'rb') as b:
+                module_src = b64encode(b.read())
+                _ = self.add_code(module, module_src)
+        # --
+        return name, digest
+    # </> load
+
+    # <> notification
+    def notification(self, title=None, content=None):
+        if not title:
+            start = len(self.instance_id) - 16
+            title = '{}({})'.format(self.instance_name, self.instance_id[start:])
+        if not content:
+            content = self.text
+        # --
+        with Source.timeit('notification'):
+            task = sp.run([
+                'termux-notification',
+                '--alert-once',
+                '--ongoing',
+                '-i', self.instance_id,
+                '-t', title,
+                '-c', content,
+                '--button1', 'reply',
+                f'--button1-action', f'echo $REPLY>{self.fifo}'
+            ])
+    # </> notification
+
+    # <> clipboard
+    def clipboard(self):
+        with Source.timeit('clipboard-set'):
+            task = sp.run([
+                'termux-clipboard-set',
+                '\n'.join([i.strip('\n').strip() for i in self.out_buffer]).encode()
+            ])
+    # </> clipboard
+
+    # -- <> module calls
+    @staticmethod
+    def function(fn):
+        fn_name = fn.__name__
+        # logger.debug('function registered: {}'.format(fn_name))
+        Source.runtime['functions'][fn_name] = {
+            'callback': fn,
+            'metadata': {}
+        }
+        return Source.runtime['functions']
+
+    @staticmethod
+    def function_call(function_name, *args, **kwargs):
+        if module := Source.runtime['functions'].get(function_name):
+            # logger.debug('{}({}, {})', function_name, args, kwargs)
+            try:
+                with Source.timeit(function_name):
+                    return module['callback'](*args, **kwargs)
+            except Exception as e:
+                logger.exception(e)
+    # </> module calls
+
+    # <> initialize
+    def initialize(self):
+        logger.remove()
+        colorize = True
+        logfmt = '{time:HH:MM:ss}|<green>{line: <3}</green>|<level>{level: <5}</level>|<level>{message}</level>'
+        logger.add(sys.stdout, colorize=colorize, format=logfmt, level='DEBUG')
+        def terminal(command):
+            logger.debug('{}', command)
+            cmd = [*command.split(' ')[1:]]
+            task = sp.Popen(
+                cmd,
+                stdout=sp.PIPE,
+                stderr=sp.PIPE,
+                shell=False,
+            )
+            task.wait()
+            return task.returncode, task.stdout.read().decode(), task.stderr.read().decode()
+        # --
+        def pip(command):
+            cmd = command.split(' ')[1:]
+            logger.debug('[pip]: {}', cmd)
+            task = sp.Popen([
+                '/data/data/com.termux/files/usr/bin/pip',
+                *cms
+            ], shell=False, stdout=sp.PIPE)
+            task.wait()
+            return task.returncode, task.stdout.read().decode()
+        # --
+        Source.function(pip)
+        Source.function(terminal)
+    # -- </>
+
+    # -- <> thread
+    def thread(self, function, *args, **kwargs):
+        def function_call(metadata):
+            metadata['exited'].clear()
+            metadata['callable'](*metadata['args'], **metadata['kwargs'])
+            metadata['exited'].set()
+        # --
+        fn_name = function.__name__
+        self.runtime['threads'][fn_name] = {
+            'exited' : Event(),
+            'callable' : function,
+            'kwargs': kwargs,
+            'args': args
+        }
+        metadata = self.runtime['threads'][fn_name]
+        t = Thread(target=function_call, args=(metadata,))
+        metadata['workthread'] = t
+        # todo: delayed thread start
+        t.start()
+        return t
+    # </>
+
+    def stop(self, *args, **kwargs):
+        logger.info('stopping...')
+        self.terminate.set()
+        for th in self.runtime['threads'].values():
+            th['workthread'].join()
+        return
+
+    @property
+    def stopped(self):
+        return self.terminate.is_set()
+
+    def start(self):
+        try:
+            # raise NotImplementedError('n/a')
+            pass
+        finally:
+            self.stop()
+
+#********************* <main>
+@logger.catch
+def main():
+    bot = Source()
+    bot.start()
+#-- </main>
+
+if __name__ == '__main__':
+    main()
+

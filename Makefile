@@ -1,13 +1,23 @@
-src := grammer
-setup := grammer-setup
-files := .bashrc .config .gitconfig .gitignore .gnupg .hushlogin exported .ssh LICENSE Makefile README.md grammer* requirements.txt src
+src := boot.py
+termux := termux.tar
+turmoid := turmoid.tar
+files := .nomedia .vimrc .vim .config/nvim .oh-my-zsh .zshrc .venv .git .gitconfig .gitignore .hushlogin LICENSE Makefile README.md requirements.txt projects src $(src) scripts turmoid.png startq
 
 run: $(src)
-	@~/.venv/bin/python $< < $<
+	@clear;~/.venv/bin/python $< < $<
 
-export:
-	tar -cf grammer-01.tar $(files)
+list:
+	~/.venv/bin/pip list
+
+export: $(termux) $(turmoid)
+	mv $^ storage/documents/binaries/
+
+$(termux):
+	termux-backup $@
+
+$(turmoid): $(files)
+	tar -cf $@ $^
 
 clean:
-	rm -rf **/*__pycache__ transport .*history
+	rm -rf **/*__pycache__ .*history .local .cache .zcomp* .wget-hsts
 

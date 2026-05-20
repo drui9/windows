@@ -2,15 +2,18 @@ syntax enable
 
 set wrap!
 set number
+set secure
 set mouse=
+set shada=
 set viminfo=
 set expandtab
 set tabstop=4
 set cursorline
 set autoindent
 set noswapfile
-set scrolloff=16
-set foldcolumn=1
+set writebackup!
+set scrolloff=12
+set foldcolumn=2
 set shiftwidth=4
 set softtabstop=4
 set encoding=utf-8
@@ -19,10 +22,10 @@ set foldmarker=<>,</>
 set foldmethod=marker
 set backspace=indent,eol,start
 
+" Plug 'neoclide/coc.nvim'
 call plug#begin('~/.config/nvim/autoload/plugged')
 Plug 'nvim-treesitter/nvim-treesitter'
 Plug 'vim-airline/vim-airline-themes'
-" Plug 'neoclide/coc.nvim'
 Plug 'vim-airline/vim-airline'
 Plug 'karb94/neoscroll.nvim'
 Plug 'nvim-lua/plenary.nvim'
@@ -46,7 +49,7 @@ let g:closetag_filenames = '*.html,*.xhtml'
 
 " misc shortcuts
 nmap 99 :e ~/.vimrc<CR>
-nmap s :suspend <CR>
+nmap . :suspend <CR>
 nmap nt :NERDTreeToggle<CR>
 nmap qw :wq <CR>
 nmap ms :w <CR>

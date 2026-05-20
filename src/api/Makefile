@@ -1,4 +1,4 @@
-src := gpg.py
+src := flask-api.py
 env := ~/.venv
 
 # encode
